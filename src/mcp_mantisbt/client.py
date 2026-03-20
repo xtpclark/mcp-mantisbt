@@ -167,4 +167,7 @@ class MantisBTClient:
             'resolution': {'name': resolution},
         }
         data = self._patch(f'/issues/{issue_id}', body)
+        # PATCH response wraps in 'issues' list, not 'issue' singular
+        if 'issues' in data:
+            return MantisBTIssue(**data['issues'][0])
         return MantisBTIssue(**data.get('issue', data))
