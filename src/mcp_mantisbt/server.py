@@ -244,7 +244,17 @@ async def read_resource(uri: str) -> str:
 
 def main():
     import asyncio
-    asyncio.run(stdio_server(server))
+    import anyio
+
+    async def _run():
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(
+                read_stream,
+                write_stream,
+                server.create_initialization_options(),
+            )
+
+    anyio.run(_run)
 
 
 if __name__ == "__main__":
