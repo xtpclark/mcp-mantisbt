@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-mantisbt"
+version = "0.1.0"
+description = "MCP server for MantisBT bug tracker"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [
+    { name = "Perry Clark", email = "perryppc@gmail.com" }
+]
+keywords = ["mcp", "mantisbt", "bug-tracker", "model-context-protocol", "ai"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Bug Tracking",
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.0.0",
+]
+
+[project.scripts]
+mcp-mantisbt = "mcp_mantisbt.server:main"
+
+[project.urls]
+Homepage = "https://github.com/xtpclark/mcp-mantisbt"
+Repository = "https://github.com/xtpclark/mcp-mantisbt"
+Issues = "https://github.com/xtpclark/mcp-mantisbt/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_mantisbt"]
