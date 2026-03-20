@@ -45,22 +45,36 @@ class MantisBTIssue(BaseModel):
     updated_at: Optional[datetime] = None
 
     def to_context_str(self) -> str:
-        """Format for injection into AI prompt as similar_incidents context."""
+        """
+        Format for injection into AI prompt as similar_incidents context.
+        Focuses on resolution notes — that's the actionable value.
+        Skips the Assay findings dump in description (not useful as prior art).
+        """
+        status_name = self.status.name if self.status else 'unknown'
         lines = [
-            f"Issue #{self.id}: {self.summary}",
-            f"Status: {self.status.name if self.status else 'unknown'}",
-            f"Severity: {self.severity.name if self.severity else 'unknown'}",
+            f"Status: {status_name}",
         ]
-        if self.description:
-            lines.append(f"Description: {self.description[:500]}")
+
+        # Surface all resolution/notes — the most valuable content
         if self.notes:
-            resolution_notes = [
+            substantive = [
                 n for n in self.notes
                 if n.text and len(n.text) > 20
             ]
-            if resolution_notes:
-                last = resolution_notes[-1]
-                lines.append(f"Resolution note: {last.text[:500]}")
+            if substantive:
+                lines.append("How it was resolved:")
+                for note in substantive:
+                    lines.append(f"  {note.text[:600]}")
+
+        if not self.notes or not any(n.text and len(n.text) > 20 for n in self.notes):
+            # Fall back to first 200 chars of description if no notes
+            if self.description:
+                # Skip Assay-generated header lines
+                desc_lines = [l for l in self.description.splitlines()
+                              if l.strip() and not l.startswith('=') and 'Assay healthcheck' not in l]
+                if desc_lines:
+                    lines.append(f"Context: {' '.join(desc_lines[:3])[:300]}")
+
         return '\n'.join(lines)
 
 
