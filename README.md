@@ -1,21 +1,38 @@
 # mcp-mantisbt
 
-The first [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for [MantisBT](https://mantisbt.org) — the open source bug tracker.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for [MantisBT](https://mantisbt.org) — the open source bug tracker.
 
-Gives AI assistants (Claude, Cursor, etc.) read/write access to MantisBT issues, projects, and resolution history. Designed as a companion to [Assay](https://assayhq.ai) — the database health check platform — where it powers resolution history lookups during AI-assisted incident analysis.
+Built in Python for automated AI analysis pipelines. Most MantisBT MCP servers are editor integrations — tools that let Claude or Cursor read your bug tracker while you code. This one is designed for a different job: autonomous systems that create tickets from diagnostic runs, and AI analysts that query resolution history to inform the next investigation.
 
 ## What it does
 
-- **Create issues** — push findings, alerts, or incidents into MantisBT
-- **Search issues** — find similar resolved issues to inform current investigation
+- **Create issues** — push findings, alerts, or incidents from automated pipelines into MantisBT
+- **Search issues** — find similar resolved issues and inject them as context into AI analysis prompts
 - **Update issues** — add notes, change status, attach resolution details
+- **Resolve issues** — mark issues resolved with structured resolution notes, capturing *how* an issue was fixed, not just that it was closed
 - **List projects** — discover available projects and categories
 
 ## Why this exists
 
-MantisBT is widely deployed in enterprises — particularly in manufacturing, defense, and telco — but had no MCP server. Every other major issue tracker (Jira, Linear, GitHub Issues) has one. This fills that gap.
+MantisBT is widely deployed in enterprises — particularly in manufacturing, defense, and telco — and it holds institutional memory: years of resolved tickets, root cause notes, and fix documentation.
 
-The primary use case that drove it: [Assay](https://assayhq.ai) detects database health issues and creates MantisBT tickets. When a similar pattern appears later, the MCP server lets the AI analyst ask "how did we fix this before?" and get real answers from the issue history.
+This server makes that memory available to AI pipelines. The core pattern:
+
+**Push:** An automated system (health check, monitoring agent, CI pipeline) detects a problem and creates a MantisBT issue — findings, severity, and context captured without manual triage.
+
+**Pull:** When a similar pattern appears later, the pipeline calls `search_issues(query, status="resolved")` to find how your team fixed it before. Those results are injected directly into the AI's prompt as context. The analyst sees: *"Here are 2 similar issues your team resolved before, and how they fixed them."*
+
+Over time, your issue tracker becomes a searchable record of institutional knowledge — and any AI analyst with access to this server can draw on it.
+
+This server is for you if you're building automated Python systems that need to interact with MantisBT as a system of record, not just as a UI to browse.
+
+**Why Python:** The existing MantisBT MCP servers are TypeScript/Node. Python means no glue code when your pipeline is already Python, and straightforward extension when you need something specific.
+
+## Requirements
+
+- Python 3.10+
+- MantisBT 2.23+ (REST API must be enabled)
+- An API token (create under My Account → API Tokens in MantisBT)
 
 ## Installation
 
@@ -32,6 +49,8 @@ pip install -e .
 ```
 
 ## Configuration
+
+Add the following to your MCP client's configuration file (e.g., `claude_desktop_config.json` or `mcp.json`):
 
 ```json
 {
@@ -66,7 +85,9 @@ pip install -e .
 | `mantisbt://issues/{id}` | Direct access to a specific issue |
 | `mantisbt://projects` | All accessible projects |
 
-## The `search_issues` tool — the key for AI resolution lookup
+## The `search_issues` tool — resolution history for AI context
+
+The key tool for AI pipelines. Search resolved issues by keyword and inject the results directly into your prompt as `similar_incidents` context:
 
 ```python
 search_issues(
@@ -78,27 +99,28 @@ search_issues(
 )
 ```
 
-Returns structured results including summary, description, resolution notes, and tags — formatted for direct injection into AI analysis prompts as `similar_incidents` context.
+Returns structured results including summary, description, resolution notes, and tags — ready for injection into an AI analysis prompt.
 
 ## Architecture
 
+Two flows, both mediated by the MCP server:
+
+**Push — capturing findings:**
 ```
-AI Assistant (Claude/Cursor)
-    ↓ MCP protocol
-mcp-mantisbt server
-    ↓ HTTP REST
-MantisBT instance
-    ↓ PostgreSQL
-mantisbt database
+Automated pipeline (monitoring, CI, health check, etc.)
+    → create_issue / add_note / resolve_issue
+    → mcp-mantisbt
+    → MantisBT
 ```
 
-## Relationship to Assay
-
-[Assay](https://assayhq.ai) uses this server in two directions:
-
-**Push (destinations plugin):** After each healthcheck run, Assay creates MantisBT issues via `destinations/mantisbt.py` — one issue per `(company, technology)` run.
-
-**Pull (MCP):** At AI analysis time, Assay calls `search_issues(query, status="resolved")` to find similar resolved issues, injects results as `similar_incidents` context into the AI prompt. The analyst sees: *"Here are 2 similar issues your team resolved before, and how they fixed them."*
+**Pull — querying resolution history:**
+```
+AI analysis pipeline
+    → search_issues(query, status="resolved")
+    → mcp-mantisbt
+    → MantisBT REST API
+    → similar_incidents injected into AI prompt
+```
 
 ## Status
 

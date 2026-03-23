@@ -39,7 +39,7 @@ class MantisBTIssue(BaseModel):
     priority: Optional[MantisBTEnum] = None
     reporter: Optional[MantisBTUser] = None
     handler: Optional[MantisBTUser] = None
-    tags: list[dict] = []
+    tags: list[MantisBTEnum] = []
     notes: list[MantisBTNote] = []
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -48,32 +48,33 @@ class MantisBTIssue(BaseModel):
         """
         Format for injection into AI prompt as similar_incidents context.
         Focuses on resolution notes — that's the actionable value.
-        Skips the Assay findings dump in description (not useful as prior art).
         """
         status_name = self.status.name if self.status else 'unknown'
         lines = [
+            f"Issue #{self.id}: {self.summary}",
             f"Status: {status_name}",
         ]
 
-        # Surface all resolution/notes — the most valuable content
-        if self.notes:
-            substantive = [
-                n for n in self.notes
-                if n.text and len(n.text) > 20
-            ]
-            if substantive:
-                lines.append("How it was resolved:")
-                for note in substantive:
-                    lines.append(f"  {note.text[:600]}")
+        if self.category:
+            lines.append(f"Category: {self.category.name}")
 
-        if not self.notes or not any(n.text and len(n.text) > 20 for n in self.notes):
-            # Fall back to first 200 chars of description if no notes
-            if self.description:
-                # Skip Assay-generated header lines
-                desc_lines = [l for l in self.description.splitlines()
-                              if l.strip() and not l.startswith('=') and 'Assay healthcheck' not in l]
-                if desc_lines:
-                    lines.append(f"Context: {' '.join(desc_lines[:3])[:300]}")
+        # Surface resolution notes — the most valuable content for AI context
+        substantive_notes = [
+            n for n in (self.notes or [])
+            if n.text and len(n.text.strip()) > 20
+        ]
+        if substantive_notes:
+            lines.append("Resolution notes:")
+            for note in substantive_notes:
+                lines.append(f"  {note.text.strip()[:600]}")
+        elif self.description:
+            # Fall back to first few lines of description if no notes
+            desc_lines = [
+                l for l in self.description.splitlines()
+                if l.strip() and not l.startswith('=')
+            ]
+            if desc_lines:
+                lines.append(f"Context: {' '.join(desc_lines[:3])[:300]}")
 
         return '\n'.join(lines)
 

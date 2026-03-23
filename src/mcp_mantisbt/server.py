@@ -24,6 +24,9 @@ import os
 import sys
 from typing import Any
 
+import httpx
+from pydantic import ValidationError
+
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp import types
@@ -35,8 +38,8 @@ logger = logging.getLogger(__name__)
 
 
 def get_client() -> MantisBTClient:
-    url = os.environ.get('MANTISBT_URL')
-    token = os.environ.get('MANTISBT_API_TOKEN')
+    url = os.environ.get('MANTISBT_URL', '').strip()
+    token = os.environ.get('MANTISBT_API_TOKEN', '').strip()
     if not url or not token:
         raise ValueError(
             "MANTISBT_URL and MANTISBT_API_TOKEN environment variables are required"
@@ -57,7 +60,7 @@ async def list_tools() -> list[types.Tool]:
                 "type": "object",
                 "properties": {
                     "project_id":  {"type": "integer", "description": "Project ID"},
-                    "summary":     {"type": "string",  "description": "Issue summary/title"},
+                    "summary":     {"type": "string",  "description": "Issue summary/title (max 255 chars)"},
                     "description": {"type": "string",  "description": "Detailed description"},
                     "severity":    {"type": "string",  "description": "trivial|minor|major|crash|block", "default": "major"},
                     "priority":    {"type": "string",  "description": "low|normal|high|urgent|immediate", "default": "normal"},
@@ -83,7 +86,8 @@ async def list_tools() -> list[types.Tool]:
             description=(
                 "Search MantisBT issues by text, status, and project. "
                 "Use status='resolved' to find similar past issues and how they were fixed. "
-                "Returns issue summaries, descriptions, and resolution notes."
+                "Returns issue summaries, descriptions, and resolution notes. "
+                "Results are capped at 50 to protect the MantisBT instance."
             ),
             inputSchema={
                 "type": "object",
@@ -91,8 +95,8 @@ async def list_tools() -> list[types.Tool]:
                     "query":      {"type": "string",  "description": "Text to search for in summary/description/notes"},
                     "project_id": {"type": "integer", "description": "Filter by project ID"},
                     "status":     {"type": "string",  "description": "new|resolved|closed|all (default: all)"},
-                    "category":   {"type": "string",  "description": "Filter by category name"},
-                    "limit":      {"type": "integer", "description": "Max results (default: 10)"},
+                    "category":   {"type": "string",  "description": "Filter by category name (client-side match)"},
+                    "limit":      {"type": "integer", "description": "Max results to return (default: 10, max: 50)"},
                 },
                 "required": [],
             },
@@ -112,12 +116,16 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="resolve_issue",
-            description="Mark a MantisBT issue as resolved with a resolution note",
+            description=(
+                "Mark a MantisBT issue as resolved. Records a resolution note capturing "
+                "how the issue was fixed — this note is what future searches surface as "
+                "institutional knowledge."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "issue_id":        {"type": "integer", "description": "Issue ID"},
-                    "resolution_note": {"type": "string",  "description": "How the issue was resolved"},
+                    "resolution_note": {"type": "string",  "description": "How the issue was resolved — be specific, this is what future AI lookups will find"},
                     "resolution":      {"type": "string",  "description": "fixed|wontfix|duplicate|nochange|suspended|notabug", "default": "fixed"},
                 },
                 "required": ["issue_id", "resolution_note"],
@@ -141,7 +149,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
 
     try:
         if name == "create_issue":
-            issue = client.create_issue(
+            issue = await client.create_issue(
                 project_id=arguments["project_id"],
                 summary=arguments["summary"],
                 description=arguments["description"],
@@ -152,15 +160,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             )
             return [types.TextContent(
                 type="text",
-                text=f"Created issue #{issue.id}: {issue.summary}\nURL: {client.base_url.replace('/api/rest/index.php', '')}/view.php?id={issue.id}",
+                text=f"Created issue #{issue.id}: {issue.summary}\nURL: {client.instance_url}/view.php?id={issue.id}",
             )]
 
         elif name == "get_issue":
-            issue = client.get_issue(arguments["issue_id"])
+            issue = await client.get_issue(arguments["issue_id"])
             return [types.TextContent(type="text", text=issue.to_context_str())]
 
         elif name == "search_issues":
-            issues = client.search_issues(
+            issues, truncated = await client.search_issues(
                 query=arguments.get("query"),
                 project_id=arguments.get("project_id"),
                 status=arguments.get("status"),
@@ -169,26 +177,26 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             )
             if not issues:
                 return [types.TextContent(type="text", text="No matching issues found.")]
-            parts = [f"Found {len(issues)} issue(s):\n"]
+            parts = [f"Found {len(issues)} issue(s)" + (" (results capped — there may be more):" if truncated else ":")]
+            parts.append("")
             for issue in issues:
                 parts.append(issue.to_context_str())
                 parts.append("---")
             return [types.TextContent(type="text", text="\n".join(parts))]
 
         elif name == "add_note":
-            note = client.add_note(
+            note = await client.add_note(
                 issue_id=arguments["issue_id"],
                 text=arguments["text"],
                 private=arguments.get("private", False),
             )
-            note_id = note.get("id", "?") if isinstance(note, dict) else "?"
             return [types.TextContent(
                 type="text",
-                text=f"Note #{note_id} added to issue #{arguments['issue_id']}",
+                text=f"Note #{note.id} added to issue #{arguments['issue_id']}",
             )]
 
         elif name == "resolve_issue":
-            issue = client.resolve_issue(
+            issue = await client.resolve_issue(
                 issue_id=arguments["issue_id"],
                 resolution_note=arguments["resolution_note"],
                 resolution=arguments.get("resolution", "fixed"),
@@ -199,7 +207,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             )]
 
         elif name == "list_projects":
-            projects = client.list_projects()
+            projects = await client.list_projects()
             if not projects:
                 return [types.TextContent(type="text", text="No projects found.")]
             lines = [f"#{p.id}: {p.name}" + (f" — {p.description}" if p.description else "")
@@ -209,8 +217,20 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         else:
             return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
 
+    except httpx.HTTPStatusError as e:
+        logger.error("MantisBT API error %s for tool %s: %s", e.response.status_code, name, e.response.text)
+        return [types.TextContent(
+            type="text",
+            text=f"MantisBT API error {e.response.status_code}: {e.response.text[:300]}",
+        )]
+    except httpx.RequestError as e:
+        logger.error("Network error for tool %s: %s", name, e)
+        return [types.TextContent(type="text", text=f"Network error connecting to MantisBT: {e}")]
+    except ValidationError as e:
+        logger.error("MantisBT API response parsing failed for tool %s: %s", name, e)
+        return [types.TextContent(type="text", text="MantisBT API returned unexpected data format. Check server logs.")]
     except Exception as e:
-        logger.error(f"Tool {name} failed: {e}", exc_info=True)
+        logger.error("Tool %s failed unexpectedly: %s", name, e, exc_info=True)
         return [types.TextContent(type="text", text=f"Error: {e}")]
 
 
@@ -231,19 +251,21 @@ async def read_resource(uri: str) -> str:
     client = get_client()
 
     if uri == "mantisbt://projects":
-        projects = client.list_projects()
+        projects = await client.list_projects()
         return json.dumps([p.model_dump() for p in projects], default=str)
 
     if uri.startswith("mantisbt://issues/"):
-        issue_id = int(uri.split("/")[-1])
-        issue = client.get_issue(issue_id)
+        parts = uri.split("/")
+        if not parts[-1].isdigit():
+            raise ValueError(f"Invalid issue URI — expected mantisbt://issues/{{id}}, got: {uri}")
+        issue_id = int(parts[-1])
+        issue = await client.get_issue(issue_id)
         return issue.to_context_str()
 
     raise ValueError(f"Unknown resource URI: {uri}")
 
 
 def main():
-    import asyncio
     import anyio
 
     async def _run():
