@@ -55,6 +55,42 @@ class MantisBTClient:
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(headers=self._headers, timeout=self.timeout)
 
+    # ── Sync convenience wrapper ───────────────────────────────────────────
+    # Use this from synchronous contexts (Flask, scripts). Handles event loop
+    # detection safely — avoids asyncio.run() blowing up if a loop is running.
+
+    def _run_sync(self, coro):
+        """Run a coroutine synchronously, safely across thread/loop contexts."""
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # Running inside an existing event loop (e.g. async test, Jupyter).
+            # Use a thread executor to avoid deadlock.
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, coro)
+                return future.result()
+        else:
+            return asyncio.run(coro)
+
+    def search_issues_sync(
+        self,
+        query: str = None,
+        project_id: int = None,
+        status: str = None,
+        category: str = None,
+        limit: int = 10,
+    ) -> tuple:
+        """Synchronous wrapper around search_issues. Safe for Flask/sync contexts."""
+        return self._run_sync(self.search_issues(
+            query=query, project_id=project_id,
+            status=status, category=category, limit=limit,
+        ))
+
     async def _get(self, path: str, params: dict = None) -> dict:
         async with self._client() as client:
             resp = await client.get(f"{self.base_url}{path}", params=params)
